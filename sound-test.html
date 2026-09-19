@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>发音诊断 · Sound Test</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 18px; }
+  .note { background: #fff8e1; border: 1px solid #f0d896; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  button { display: block; width: 100%; margin: 14px 0 6px; padding: 14px; font-size: 16px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
+  button:active { opacity: .8; }
+  pre { background: #f4f4f5; border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-all; min-height: 18px; margin: 4px 0 12px; }
+  .ok { color: #047857; } .bad { color: #b91c1c; }
+  .env { font-size: 12px; color: #666; margin-top: 18px; }
+</style>
+</head>
+<body>
+<h1>发音诊断页</h1>
+<p class="note">本页用于发音问题诊断：请依次点击下面 3 个按钮，把每个按钮下方的结果截图反馈。</p>
+
+<button id="b1">① 播放音素 /a/（new Audio → voicework/a.mp3）</button>
+<pre id="r1">（未测试）</pre>
+
+<button id="b2">② 播放整词示例（new Audio → words/wquestion.mp3）</button>
+<pre id="r2">（未测试）</pre>
+
+<button id="b3">③ Web Audio 解码 a.mp3（decodeAudioData）</button>
+<pre id="r3">（未测试）</pre>
+
+<p class="env" id="env"></p>
+
+<script>
+  function show(id, ok, msg) {
+    var el = document.getElementById(id);
+    el.textContent = (ok ? '[成功] ' : '[失败] ') + msg;
+    el.className = ok ? 'ok' : 'bad';
+  }
+  function fmtErr(e) { return e && (e.name + ': ' + e.message) || String(e); }
+
+  // 按钮1：HTML5 Audio 播 voicework/a.mp3
+  document.getElementById('b1').addEventListener('click', function () {
+    var out = '';
+    try {
+      var a = new Audio('/sounds/voicework/a.mp3?v=' + Date.now());
+      var settled = false;
+      var t = setTimeout(function () { if (!settled) { settled = true; show('r1', false, '超时：10 秒内 canplaythrough 未触发（加载/解码被卡住）readyState=' + a.readyState + ' networkState=' + a.networkState); } }, 10000);
+      a.addEventListener('canplaythrough', function () {
+        if (settled) return; settled = true; clearTimeout(t);
+        show('r1', true, 'canplaythrough 触发，duration=' + a.duration.toFixed(2) + 's，play()=' + out + '，内核已能加载并解码该音频');
+      });
+      a.addEventListener('error', function () { if (settled) return; settled = true; clearTimeout(t); show('r1', false, 'Audio error 事件 code=' + (a.error && a.error.code) + ' ' + (a.error && a.error.message)); });
+      a.play().then(function () { out = 'resolve'; }).catch(function (e) { out = 'reject(' + fmtErr(e) + ')'; if (!settled) { settled = true; clearTimeout(t); show('r1', false, 'play() 被拒绝：' + fmtErr(e)); } });
+    } catch (e) { show('r1', false, '构造 Audio 异常：' + fmtErr(e)); }
+  });
+
+  // 按钮2：HTML5 Audio 播 words/wquestion.mp3
+  document.getElementById('b2').addEventListener('click', function () {
+    try {
+      var a = new Audio('/sounds/words/wquestion.mp3?v=' + Date.now());
+      var settled = false;
+      var t = setTimeout(function () { if (!settled) { settled = true; show('r2', false, '超时：10 秒内 canplaythrough 未触发 readyState=' + a.readyState); } }, 10000);
+      a.addEventListener('canplaythrough', function () { if (settled) return; settled = true; clearTimeout(t); show('r2', true, 'canplaythrough 触发，duration=' + a.duration.toFixed(2) + 's'); });
+      a.addEventListener('error', function () { if (settled) return; settled = true; clearTimeout(t); show('r2', false, 'Audio error 事件 code=' + (a.error && a.error.code) + ' ' + (a.error && a.error.message)); });
+      a.play().catch(function (e) { if (!settled) { settled = true; clearTimeout(t); show('r2', false, 'play() 被拒绝：' + fmtErr(e)); } });
+    } catch (e) { show('r2', false, '构造 Audio 异常：' + fmtErr(e)); }
+  });
+
+  // 按钮3：Web Audio decodeAudioData
+  document.getElementById('b3').addEventListener('click', function () {
+    var ctx = null;
+    try {
+      fetch('/sounds/voicework/a.mp3?v=' + Date.now()).then(function (r) {
+        var ct = r.headers.get('content-type');
+        return r.arrayBuffer().then(function (buf) { return { r: r, ct: ct, buf: buf }; });
+      }).then(function (x) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        return ctx.decodeAudioData(x.buf).then(function (d) {
+          show('r3', true, 'decodeAudioData 成功：HTTP ' + x.r.status + ' Content-Type=' + x.ct + '，采样率=' + d.sampleRate + 'Hz 声道=' + d.numberOfChannels + ' 时长=' + d.duration.toFixed(2) + 's（说明文件本体完好，浏览器能解码）');
+          return ctx.close();
+        }, function (e) {
+          show('r3', false, 'decodeAudioData 失败：' + fmtErr(e) + '（HTTP ' + x.r.status + ' Content-Type=' + x.ct + ' bytes=' + x.buf.byteLength + '）');
+          return ctx.close();
+        });
+      }).catch(function (e) { show('r3', false, 'fetch/创建 AudioContext 失败：' + fmtErr(e)); });
+    } catch (e) { show('r3', false, '异常：' + fmtErr(e)); }
+  });
+
+  // 环境信息：帮用户回报时定位内核
+  (function () {
+    var n = navigator;
+    var lines = [];
+    lines.push('UA: ' + n.userAgent);
+    try { lines.push('speechSynthesis voices: ' + (window.speechSynthesis ? window.speechSynthesis.getVoices().length : 'API 不存在')); } catch (e) {}
+    fetch('/sounds/voicework/a.mp3', { method: 'HEAD' }).then(function (r) {
+      lines.push('HEAD a.mp3: HTTP ' + r.status + ' Content-Type=' + r.headers.get('content-type'));
+      document.getElementById('env').textContent = lines.join('  |  ');
+    }).catch(function (e) {
+      lines.push('HEAD a.mp3 失败: ' + fmtErr(e));
+      document.getElementById('env').textContent = lines.join('  |  ');
+    });
+  })();
+</script>
+</body>
+</html>
